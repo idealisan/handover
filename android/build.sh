@@ -49,10 +49,13 @@ cp "$OUT/dex/classes.dex" "$OUT/classes.dex"
 
 "$BT/zipalign" -f 4 "$OUT/base.apk" "$OUT/aligned.apk"
 
-KS="$OUT/debug.keystore"
-keytool -genkeypair -keystore "$KS" -storepass android -keypass android \
-  -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-  -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+# 固定调试密钥：复用同一把，保证每次构建签名一致，可 adb install -r 覆盖
+KS="tmp/handover-debug.keystore"
+if [ ! -f "$KS" ]; then
+  keytool -genkeypair -keystore "$KS" -storepass android -keypass android \
+    -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+    -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+fi
 
 "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --key-pass pass:android \
   --out "$OUT/HandoverDemo.apk" "$OUT/aligned.apk"

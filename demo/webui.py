@@ -18,7 +18,7 @@ HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Handover Demo — HandShaker macOS 客户端模拟</title>
+<title>Handover Demo — 连接真实安卓设备</title>
 <style>
 :root{--bg:#f5f6f8;--panel:#fff;--line:#e3e6ea;--txt:#1d2129;--sub:#6b7280;
 --accent:#2f6feb;--accent-soft:#eaf1ff;--ok:#18a058;--warn:#d97706;--err:#d03050;}
@@ -61,8 +61,6 @@ th{color:var(--sub);font-weight:600;font-size:11px}
 tr.sel{background:var(--accent-soft)}tr:hover{background:#f8f9fb}
 .bar{height:6px;background:#eef0f3;border-radius:4px;overflow:hidden;min-width:90px}
 .bar>i{display:block;height:100%;background:var(--accent)}
-.qr{display:grid;gap:0;justify-content:center;margin:8px 0;line-height:0}
-.qr i{width:5px;height:5px;display:block}.qr i.b{background:#111}.qr i.w{background:#fff}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
 .hidden{display:none!important}
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;
@@ -90,7 +88,9 @@ ul.cmd{columns:2;font-size:11px;color:var(--sub);padding-left:18px;margin:6px 0}
 
 <div class="app">
 <aside>
-  <div class="card"><h2>设备</h2>
+  <div class="card"><h2>设备（真实）</h2>
+    <div class="kv" style="margin-bottom:8px">下方为 mDNS 发现的真实设备；也可手动填写地址。
+      <b>只连接真实安卓设备</b>。</div>
     <div id="devices"></div>
     <div class="row" style="margin-top:8px">
       <input type="text" id="mHost" placeholder="IP / 主机" style="flex:2">
@@ -102,23 +102,7 @@ ul.cmd{columns:2;font-size:11px;color:var(--sub);padding-left:18px;margin:6px 0}
     </div>
   </div>
 
-  <div class="card"><h2>模拟手机</h2>
-    <div class="kv">监听端口 <b id="pPort">-</b> · 回环地址</div>
-    <label class="row" style="margin-top:8px;font-size:12px">
-      <input type="checkbox" id="lockChk" style="width:auto" onchange="setLocked(this.checked)">
-      模拟锁屏（握手返回 locked）
-    </label>
-    <div class="row" style="margin-top:8px">
-      <button onclick="post('reseed')">补回示例文件</button>
-    </div>
-  </div>
-
-  <div class="card"><h2>连接二维码</h2>
-    <div id="qr"></div>
-    <div class="mono" id="qrPayload" style="word-break:break-all;font-size:10px"></div>
-  </div>
-
-  <div class="card"><h2>能力</h2>
+  <div class="card"><h2>连接信息</h2>
     <div class="kv" id="caps"></div>
   </div>
 </aside>
@@ -177,15 +161,15 @@ ul.cmd{columns:2;font-size:11px;color:var(--sub);padding-left:18px;margin:6px 0}
       <tbody id="logRows"></tbody></table></div>
 
     <div id="tab-about" class="hidden">
-      <p><b>这是什么</b>：用 Python 模拟 HandShaker macOS 客户端的 GUI demo。
-      界面通过本地 HTTP 接口驱动一个真正的 TCP 客户端，客户端与「模拟手机」
-      通过 SSP-like 帧协议通信（控制面 JSON + session_id 裸流数据面）。</p>
-      <p class="muted">真实 HandShaker 的控制面是 Protobuf，帧头与密钥交换细节尚未
-      静态分析确认（见 doc/06）。因此本 demo 不能直接连官方安卓端；后续接真实设备时
-      需要替换编解码层。当前可复用的部分是架构、状态机与交互流程。</p>
-      <p><b>已实现的 SSP 能力</b>：两轮握手与信任、心跳、设备信息、目录浏览、
+      <p><b>这是什么</b>：用 Python 写的桌面端 demo，复刻 HandShaker macOS 客户端的
+      交互形态。界面通过本地 HTTP 接口驱动一个真正的 TCP 客户端，客户端连接的是
+      <b>真实安卓设备</b>（经 adb forward 或局域网 mDNS），数据是设备上的真实文件。</p>
+      <p class="muted">控制面为 JSON（真实 HandShaker 用 Protobuf，帧头与密钥交换见 doc/06），
+      因此不能直接连官方安卓端；连接的是本项目自建、协议一致的安卓端 APK。
+      安卓端已申请文件与相册权限，直接浏览手机公共存储（/sdcard）。</p>
+      <p><b>已实现的能力</b>：两轮握手与信任、心跳、设备信息、目录浏览、
       新建/重命名/删除（回收站）、分块上传下载 + MD5 校验 + 取消、
-      剪贴板双向同步与变更推送、文件变更推送。</p>
+      剪贴板同步与变更推送、文件变更推送。</p>
       <p><b>SSP 的 41 个请求类型</b>（左侧为协议原名，★ 表示 demo 已覆盖）：</p>
       <ul class="cmd" id="cmdList"></ul>
     </div>
@@ -195,9 +179,9 @@ ul.cmd{columns:2;font-size:11px;color:var(--sub);padding-left:18px;margin:6px 0}
 
 <div id="modal" class="modal-bg hidden"><div class="modal">
   <h3>手机端授权</h3>
-  <p>模拟手机弹出信任对话框：<b id="trustDevice"></b> 请求连接。<br>
-  真实 HandShaker 中，用户需在手机上点「信任」；此处对应 SSPHandShakeResponse02
-  的 result 字段（ok / locked / needauth / failed）。</p>
+  <p><b id="trustDevice"></b> 请求连接，请选择是否信任这台电脑。<br>
+  对应握手响应 02 的 result 字段（ok / failed）；由桌面端发起，
+  安卓端按选择结果确认。</p>
   <div class="row" style="justify-content:flex-end">
     <button class="danger" onclick="doPair('NO')">拒绝</button>
     <button onclick="doPair('ONCE')">仅此一次</button>
@@ -207,7 +191,7 @@ ul.cmd{columns:2;font-size:11px;color:var(--sub);padding-left:18px;margin:6px 0}
 <div id="toast" class="toast hidden"></div>
 
 <script>
-let state=null, curPath='/', selected=new Set(), tab='files', trustVisible=false;
+let state=null, curPath='/', selected=new Set(), tab='files';
 const $=id=>document.getElementById(id);
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function fmtSize(n){if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(1)+' MB';}
@@ -225,11 +209,11 @@ async function pollOnce(){try{const r=await fetch('/api/state');state=await r.js
 function switchTab(t){tab=t;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
   ['files','clip','transfer','log','about'].forEach(x=>$('tab-'+x).classList.toggle('hidden',x!==t));}
 function connectDev(el){post('connect',{host:el.dataset.host,port:parseInt(el.dataset.port)});}
-function manualConnect(){const h=$('mHost').value.trim()||'127.0.0.1';const p=parseInt($('mPort').value||state?.phone?.port||0);
+function manualConnect(){const h=$('mHost').value.trim()||state?.default_host||'127.0.0.1';
+  const p=parseInt($('mPort').value||state?.default_port||10086);
   post('connect',{host:h,port:p});}
 function doDisconnect(){post('disconnect');}
-function doPair(t){post('pair',{trust:t});trustVisible=false;}
-function setLocked(v){post('set_locked',{locked:v});}
+function doPair(t){post('pair',{trust:t});}
 function goUp(){if(curPath==='/')return;const p=curPath.replace(/\/$/,'').split('/');p.pop();
   post('list_dir',{path:'/'+(p.filter(Boolean).join('/'))});}
 function doMkdir(){const n=prompt('新建文件夹名称');if(n)post('mkdir',{name:n});}
@@ -250,32 +234,27 @@ function doUpload(input){const f=input.files[0];if(!f)return;
 
 function render(){
   if(!state)return;
-  const c=state.connection,q=state.qr;
+  const c=state.connection;
   const labels={disconnected:'未连接',connected:'已连接',need_trust:'等待手机授权',
-    paired:'已连接 · 已信任',rejected:'被拒绝',locked:'手机锁屏',dead:'连接中断'};
-  const cls={paired:'on',connected:'wait',need_trust:'wait',locked:'wait',rejected:'bad',dead:'bad'};
+    paired:'已连接 · 已信任',rejected:'被拒绝',dead:'连接中断'};
+  const cls={paired:'on',connected:'wait',need_trust:'wait',rejected:'bad',dead:'bad'};
   $('stage').textContent=labels[c.stage]||c.stage;$('stage').className='pill '+(cls[c.stage]||'');
   $('ver').textContent='协议 '+(c.protocol_version||'-')+' · demo '+state.versions.app;
   $('hb').textContent=c.last_heartbeat?('心跳 '+new Date(c.last_heartbeat*1000).toLocaleTimeString('zh-CN',{hour12:false})):'';
-  $('pPort').textContent=state.phone.port;
-  $('lockChk').checked=state.phone.locked;
+  $('mHost').placeholder=state.default_host||'127.0.0.1';
+  if(!$('mPort').value)$('mPort').value=state.default_port||10086;
   $('caps').innerHTML='mDNS '+(state.capabilities.zeroconf?'可用':'不可用')+
-    ' · 二维码 '+(state.capabilities.qrcode?'可用':'不可用')+
+    '<br>目标 '+(state.default_host||'127.0.0.1')+':'+(state.default_port||10086)+
+    '（adb forward → 真机 10086）'+
+    '<br>数据源：设备公共存储 /sdcard'+
     (state.capabilities.zeroconf_error?('<br><span class="mono">'+esc(state.capabilities.zeroconf_error)+'</span>'):'');
 
-  // 设备列表
-  $('devices').innerHTML=state.devices.map(d=>
+  // 设备列表（仅 mDNS 真实发现）
+  $('devices').innerHTML=state.devices.length?state.devices.map(d=>
     '<div class="dev"><div><div class="nm">'+esc(d.name)+' <span class="badge">'+esc(d.source)+'</span></div>'+
     '<div class="meta mono">'+esc(d.host)+':'+d.port+'</div></div>'+
-    '<button class="primary" data-host="'+esc(d.host)+'" data-port="'+d.port+'" onclick="connectDev(this)">连接</button></div>').join('');
-
-  // 二维码
-  $('qrPayload').textContent=q.payload||'';
-  if(q.matrix&&q.matrix.length){
-    const n=q.matrix.length;
-    $('qr').innerHTML='<div class="qr" style="grid-template-columns:repeat('+n+',5px)">'+
-      q.matrix.map(row=>row.map(v=>'<i class="'+(v?'b':'w')+'"></i>').join('')).join('')+'</div>';
-  }else{$('qr').innerHTML='<div class="empty">二维码不可用</div>';}
+    '<button class="primary" data-host="'+esc(d.host)+'" data-port="'+d.port+'" onclick="connectDev(this)">连接</button></div>').join('')
+    :'<div class="empty">mDNS 暂未发现设备，请在上方手动填写地址连接</div>';
 
   // 信任弹窗
   const need=c.stage==='need_trust';

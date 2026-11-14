@@ -32,18 +32,27 @@ aapt2 link  ->  javac  ->  jar + d8  ->  zip(classes.dex)  ->  zipalign  ->  apk
 
 构建脚本为 `android/build.sh`。它把中间产物放在 `tmp/android-build.XXXXXX`（`mktemp` 新建的
 独立目录），**不删除任何已有文件**；SDK 优先读 `ANDROID_HOME` / `ANDROID_SDK_ROOT`，
-否则回落到 `$HOME/Library/Android/sdk`。
+否则回落到 `$HOME/Library/Android/sdk`。调试密钥固定在 `tmp/handover-debug.keystore`，
+每次构建复用同一把，保证 `adb install -r` 覆盖安装不会因签名变化而失败。
 
 ## 3. 构建与安装
 
 ```
 bash android/build.sh
 adb install -r tmp/HandoverDemo.apk
+# 授予真实存储/相册权限
+for p in android.permission.READ_MEDIA_IMAGES android.permission.READ_MEDIA_VIDEO \
+         android.permission.READ_MEDIA_AUDIO android.permission.POST_NOTIFICATIONS; do \
+  adb shell pm grant com.handover.demo "$p"; done
+adb shell appops set com.handover.demo MANAGE_EXTERNAL_STORAGE allow
+adb shell am force-stop com.handover.demo
 adb shell am start -n com.handover.demo/.MainActivity
 adb forward tcp:10086 tcp:10086
 ```
 
 产物：`tmp/HandoverDemo.apk`（调试密钥签名，仅用于测试；不用于发布）。
+`MANAGE_EXTERNAL_STORAGE` 是特殊权限，正式使用需在系统设置里开启「所有文件访问」；
+界面也提供「授权文件访问」按钮跳转设置页。
 
 ## 4. APK 设计
 
@@ -52,15 +61,19 @@ adb forward tcp:10086 tcp:10086
 | 包名 | `com.handover.demo` |
 | minSdk / targetSdk | 26 / 36 |
 | 组件 | `MainActivity`（程序化 UI）+ `PhoneService`（前台服务，`dataSync`） |
-| 权限 | INTERNET、ACCESS_NETWORK_STATE、CHANGE_WIFI_MULTICAST_STATE、FOREGROUND_SERVICE、FOREGROUND_SERVICE_DATA_SYNC、POST_NOTIFICATIONS |
+| 权限 | MANAGE_EXTERNAL_STORAGE、READ_MEDIA_IMAGES/VIDEO/AUDIO、READ/WRITE_EXTERNAL_STORAGE（旧版）、INTERNET、ACCESS_NETWORK_STATE、CHANGE_WIFI_MULTICAST_STATE、FOREGROUND_SERVICE、FOREGROUND_SERVICE_DATA_SYNC、POST_NOTIFICATIONS |
 | 端口 | TCP 10086，绑定 0.0.0.0 |
 | 发现 | `NsdManager` 注册 `_handshaker_ssp._tcp`，并持有 MulticastLock |
-| 存储 | `getExternalFilesDir(null)/phone`，带 `.Trash` 回收站 |
+| 存储 | **设备公共存储 `/sdcard`**（`Environment.getExternalStorageDirectory()`），无示例/占位文件 |
 | 剪贴板 | 系统剪贴板 + 内存缓存（Android 10+ 后台读取受限，GET 返回缓存） |
 | 设备信息 | Build、BatteryManager、StatFs |
 
-存储放在应用专属外部目录，避开分区存储与动态权限问题；连接电脑后，文件会出现在
-`/storage/emulated/0/Android/data/com.handover.demo/files/phone/`。
+安卓端**真实访问系统目录**：申请并获取「所有文件访问」（MANAGE_EXTERNAL_STORAGE）与
+相册/媒体权限后，浏览的是手机公共存储根目录 `/sdcard`，能看到 DCIM、Pictures、
+Download、Music、Documents 以及用户截图等真实文件。回收站放在应用专属目录，
+不污染公共存储。运行时权限在 `MainActivity` 申请，「所有文件访问」需跳转系统设置
+（测试时用 `appops set com.handover.demo MANAGE_EXTERNAL_STORAGE allow` 授予）。
+早期版本的应用专属虚拟目录与示例文件已按需求删除（见 doc/10）。
 
 ## 5. 协议实现
 
@@ -81,7 +94,7 @@ adb forward tcp:10086 tcp:10086
 - 每个 `X` 请求回复 `X_ACK`，带 `seq` 与 `session_id`；客户端按 `seq` 匹配。
 - 上传时数据帧先于 `UPLOAD_DONE` 到达（同一 TCP 连接有序），服务端在 done 时校验 MD5。
 - 下载由独立线程发数据帧，每 64 KB 停 6 ms，便于取消与进度展示。
-- 路径统一做 canonical 校验，拒绝越出虚拟根目录。
+- 路径统一做 canonical 校验，拒绝越出 `/sdcard` 根目录。
 
 ## 6. 联调结果
 
@@ -96,16 +109,19 @@ adb forward tcp:10086 tcp:10086
 PASS  连接 + HELLO  need_trust
 PASS  信任握手  ok
 PASS  设备信息  SM-A536B
-PASS  目录浏览  6 项
+PASS  目录浏览  13 项          # /sdcard 真实根目录
 PASS  上传下载往返  done
-PASS  剪贴板  2
+PASS  剪贴板  1
 探测结果：6/6 通过
 ```
 
-5. 安卓端落盘核验：`probe.txt` 950 字节，内容为 `probe from desktop` 重复，MD5 往返一致。
+5. 安卓端落盘核验：`probe.txt` 等文件写入公共存储，`probe from desktop` 内容 MD5 往返一致。
 6. Web GUI 联调：`GET /` 返回 200；通过 `/api/action` 依次执行 connect → pair → list_dir，
    状态从 `need_trust` 变为 `paired`，设备型号 `SM-A536B`，目录列出
-   DCIM / Documents / Download / Music / Pictures / probe.txt。
+   `/sdcard` 真实内容：Alarms / Audiobooks / DCIM / Documents / Download / Movies /
+   Music / Notifications / Pictures / Podcasts / Recordings / Ringtones 等。
+7. **真实截图可见**：`/Pictures/Screenshots/Screenshot_20261114-042107_Handover Demo.png`
+   （84925 字节）可在界面浏览、下载，且与设备原图字节一致；双向上传亦落到公共存储。
 
 ## 7. 已知限制
 

@@ -1,7 +1,7 @@
-"""演示引擎：把模拟手机、桌面客户端、发现层与 UI 状态串起来。
+"""演示引擎：把桌面客户端、发现层与 UI 状态串起来。
 
-Web UI 只通过 snapshot() 读状态、通过 action() 下发动作，
-不直接碰 socket，方便以后把 GUI 换成真正的原生窗口。
+本工程不内置任何模拟手机。所有文件与设备信息都来自通过 TCP 连接的真实安卓端。
+Web UI 只通过 snapshot() 读状态、通过 action() 下发动作。
 """
 from __future__ import annotations
 
@@ -9,18 +9,17 @@ import base64
 import binascii
 import os
 import posixpath
-import threading
 import time
-import uuid
 from collections import deque
 from pathlib import Path
 
 from .client import DesktopClient
-from .discovery import Discovery, lan_ip
-from .mock_phone import PhoneServer, VirtualPhone
+from .discovery import Discovery
 from .protocol import SSP_REQUEST_TYPES
 
 MAX_UPLOAD = 8 * 1024 * 1024
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 10086  # adb forward tcp:10086 tcp:10086 -> 真机 PhoneService
 
 
 class Engine:
@@ -29,8 +28,6 @@ class Engine:
         self.downloads = self.workdir / "downloads"
         self.downloads.mkdir(parents=True, exist_ok=True)
 
-        self.phone = VirtualPhone(self.workdir / "phone")
-        self.server = PhoneServer(self.phone)
         self.client = DesktopClient(self.downloads, on_event=self._on_client_event)
         self.discovery = Discovery()
 
@@ -38,17 +35,12 @@ class Engine:
         self._listing: dict = {"path": "/", "entries": []}
         self._clipboard: list = []
         self._events: deque = deque(maxlen=60)
-        self._token = uuid.uuid4().hex[:8]
-        self._lan_ip = lan_ip()
-        self._qr: dict = {}
         self._started = False
 
     # ------------------------------------------------------------ 生命周期
     def start(self) -> None:
-        self.server.start()
+        # 只浏览 mDNS；真机安卓端会自行注册 _handshaker_ssp._tcp。
         self.discovery.start()
-        self.discovery.register("Handover 模拟手机", self.server.port)
-        self._qr = self._make_qr()
         self._started = True
 
     def stop(self) -> None:
@@ -57,21 +49,6 @@ class Engine:
         except Exception:
             pass
         self.discovery.stop()
-        self.server.stop()
-
-    def _make_qr(self) -> dict:
-        payload = (f"handover://{self._lan_ip}:{self.server.port}"
-                   f"?p=1.0-demo&t={self._token}")
-        try:
-            import qrcode
-            q = qrcode.QRCode(border=2)
-            q.add_data(payload)
-            q.make(fit=True)
-            matrix = [[1 if v else 0 for v in row] for row in q.get_matrix()]
-            return {"available": True, "payload": payload, "matrix": matrix}
-        except Exception as exc:
-            return {"available": False, "payload": payload, "matrix": [],
-                    "error": str(exc)}
 
     # --------------------------------------------------------------- 事件
     def _on_client_event(self, cmd: str, data: dict) -> None:
@@ -85,13 +62,8 @@ class Engine:
 
     # --------------------------------------------------------------- 设备
     def devices(self) -> list[dict]:
-        out = [{
-            "id": "builtin",
-            "name": "内置模拟手机",
-            "host": "127.0.0.1",
-            "port": self.server.port,
-            "source": "builtin",
-        }]
+        """只返回 mDNS 真实发现的设备；手动连接由界面输入框完成。"""
+        out = []
         for i, s in enumerate(self.discovery.services()):
             out.append({
                 "id": f"mdns-{i}",
@@ -111,8 +83,8 @@ class Engine:
         return handler(args)
 
     def _act_connect(self, a: dict) -> dict:
-        host = str(a.get("host", "127.0.0.1"))
-        port = int(a.get("port", self.server.port))
+        host = str(a.get("host", DEFAULT_HOST))
+        port = int(a.get("port", DEFAULT_PORT))
         hello = self.client.connect(host, port)
         return {"hello": hello, "stage": self.client.snapshot()["stage"]}
 
@@ -197,15 +169,6 @@ class Engine:
         self._clipboard = self.client.get_clipboard()
         return {"ok": True}
 
-    def _act_set_locked(self, a: dict) -> dict:
-        self.server.set_locked(bool(a.get("locked", False)))
-        return {"ok": True}
-
-    def _act_reseed(self, a: dict) -> dict:
-        """补回示例文件（不删除任何已有文件）。"""
-        self.phone._seed()  # noqa: SLF001 - demo 内部播种
-        return {"ok": True}
-
     # ------------------------------------------------------------- 快照
     def snapshot(self) -> dict:
         cs = self.client.snapshot()
@@ -220,18 +183,17 @@ class Engine:
                 "last_heartbeat": cs["last_heartbeat"],
             },
             "devices": self.devices(),
+            "default_host": DEFAULT_HOST,
+            "default_port": DEFAULT_PORT,
             "listing": self._listing,
             "current_path": self._current_path,
             "clipboard": self._clipboard,
             "transfers": cs["transfers"],
             "log": cs["log"],
             "events": list(self._events),
-            "qr": self._qr,
-            "phone": {"locked": self.phone.locked, "port": self.server.port},
             "capabilities": {
                 "zeroconf": self.discovery.available,
                 "zeroconf_error": self.discovery.error,
-                "qrcode": bool(self._qr.get("available")),
             },
             "versions": {
                 "app": "0.1.0",

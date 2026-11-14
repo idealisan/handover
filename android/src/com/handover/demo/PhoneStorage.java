@@ -1,6 +1,7 @@
 package com.handover.demo;
 
 import android.content.Context;
+import android.os.Environment;
 import android.os.StatFs;
 import android.util.Log;
 
@@ -13,56 +14,35 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Comparator;
 
-/** 安卓端虚拟存储：应用专属外部目录，避免分区存储权限问题。 */
+/**
+ * 安卓端真实存储：根目录是设备公共存储 /sdcard（Environment.getExternalStorageDirectory）。
+ * 不创建任何示例/占位文件，界面看到的就是手机上真实存在的目录与文件。
+ * 需要 MANAGE_EXTERNAL_STORAGE（所有文件访问）+ READ_MEDIA_* 权限，见 AndroidManifest
+ * 与 MainActivity 的申请逻辑。
+ */
 final class PhoneStorage {
     private static final String TAG = "HandoverDemo";
     private final File root;
     private final File trash;
 
     PhoneStorage(Context ctx) {
+        // 真实手机公共存储根目录
+        root = Environment.getExternalStorageDirectory();
+        // 回收站放在应用专属目录，避免往公共存储里塞不必要的东西
         File base = ctx.getExternalFilesDir(null);
         if (base == null) base = ctx.getFilesDir();
-        root = new File(base, "phone");
-        ensure(root);
-        trash = new File(root, ".Trash");
-        ensure(trash);
-        seed();
+        trash = new File(base, "trash");
+        if (!trash.exists()) trash.mkdirs();
     }
 
     File getRoot() { return root; }
 
-    private static void ensure(File dir) {
-        if (!dir.exists()) dir.mkdirs();
-    }
-
-    private void seed() {
-        String[][] dirs = {
-                {"DCIM", "Camera"}, {"Pictures", "Screenshots"},
-                {"Music"}, {"Download"}, {"Documents"}
-        };
-        for (String[] parts : dirs) {
-            File d = root;
-            for (String p : parts) d = new File(d, p);
-            ensure(d);
+    /** 是否已拿到「所有文件访问」权限。 */
+    static boolean hasAllFilesAccess() {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            return Environment.isExternalStorageManager();
         }
-        writeIfMissing(new File(root, "Documents/欢迎.txt"), "Handover Demo 安卓端虚拟存储\n");
-        writeIfMissing(new File(root, "Documents/协议说明.txt"), "控制面 JSON；数据面按 session_id 走裸字节流\n");
-        writeIfMissing(new File(root, "DCIM/Camera/photo_001.txt"), "示例图片占位\n");
-        writeIfMissing(new File(root, "Music/track_001.txt"), "示例音频占位\n");
-    }
-
-    private void writeIfMissing(File f, String text) {
-        try {
-            if (!f.exists()) {
-                File p = f.getParentFile();
-                if (p != null) ensure(p);
-                FileOutputStream fos = new FileOutputStream(f);
-                fos.write(text.getBytes("UTF-8"));
-                fos.close();
-            }
-        } catch (IOException e) {
-            Log.w(TAG, "seed failed", e);
-        }
+        return true;
     }
 
     private static String normalize(String path) {
@@ -97,7 +77,8 @@ final class PhoneStorage {
                 }
             });
             for (File c : children) {
-                if (c.getName().equals(".Trash")) continue;
+                // 跳过应用私有 Android/data 等无权限目录，避免噪音
+                if (c.getName().equals("Android") && c.isDirectory()) continue;
                 JSONObject o = new JSONObject();
                 o.put("name", c.getName());
                 o.put("path", "/" + relativize(c));
@@ -110,6 +91,8 @@ final class PhoneStorage {
         JSONObject res = new JSONObject();
         res.put("path", normalize(path));
         res.put("entries", arr);
+        res.put("root", root.getAbsolutePath());
+        res.put("all_files_access", hasAllFilesAccess());
         return res;
     }
 
@@ -126,7 +109,7 @@ final class PhoneStorage {
         String n = safeName(name);
         File dir = new File(resolve(parent), n);
         if (dir.exists()) throw new IOException("同名文件已存在");
-        if (!dir.mkdirs()) throw new IOException("创建目录失败");
+        if (!dir.mkdirs()) throw new IOException("创建目录失败（检查存储权限）");
         JSONObject o = new JSONObject();
         o.put("path", "/" + relativize(dir));
         return o;
@@ -178,7 +161,7 @@ final class PhoneStorage {
     synchronized void writeFile(String path, byte[] data) throws IOException {
         File f = resolve(path);
         File p = f.getParentFile();
-        if (p != null) ensure(p);
+        if (p != null && !p.exists()) p.mkdirs();
         FileOutputStream fos = new FileOutputStream(f);
         fos.write(data);
         fos.close();
@@ -187,18 +170,14 @@ final class PhoneStorage {
     synchronized JSONObject usage() {
         JSONObject o = new JSONObject();
         try {
-            o.put("used", sizeOf(root));
             StatFs stat = new StatFs(root.getAbsolutePath());
-            o.put("total", stat.getTotalBytes());
-        } catch (Exception ignored) { }
+            long total = stat.getTotalBytes();
+            long avail = stat.getAvailableBytes();
+            o.put("used", total - avail);
+            o.put("total", total);
+        } catch (Exception e) {
+            Log.w(TAG, "usage failed", e);
+        }
         return o;
-    }
-
-    private long sizeOf(File f) {
-        if (f.isFile()) return f.length();
-        long s = 0;
-        File[] cs = f.listFiles();
-        if (cs != null) for (File c : cs) s += sizeOf(c);
-        return s;
     }
 }
