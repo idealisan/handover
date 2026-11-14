@@ -3,6 +3,9 @@
 > 安卓样本位于 `tmp/` 目录（包名 `com.smartutils.smartfolder.airshare`，版本 2.5.5，
 > `assets/version.properties` 中 `VERSION_CODE=401`，构建时间 2020-10-08）。
 > 内部代码包名仍为 `com.smartisanos.smartfolder`。
+>
+> 修订：后续取得的官方 APK 分析见 `07-官方HandShaker-APK对照分析.md`。该报告确认
+> 官方客户端同样带有本文 §6 所述的 native 混淆，并把本文 §8 中此项由「未验证」升级为事实。
 
 ## 1. 样本性质与可信度边界
 
@@ -175,5 +178,7 @@ dex 里也确实存在 `parseIoBuffer` 字符串。
 - 【事实】proto 全文、权限、组件、AOA 过滤、native 源码、类/字符串清单。
 - 【强推断】两端共享同一份 proto、AOA 由配件过滤自动拉起服务、`10086` 为 SSP 端口。
 - 【推断/未验证】`parseIoBuffer` 解密的是全部 SSP 帧还是仅密钥交换材料；
-  官方手机端是否也带同样的 native 混淆；广告 SDK 是否改动过协议逻辑。
+  广告 SDK 是否改动过协议逻辑。
+- 【已确认】官方手机端同样带有该 native 混淆：见 `07-官方HandShaker-APK对照分析.md`
+  （官方 1.1.0 系统 APK 的 JNI 源码与 7 个 ABI `.so` 与本样本逐字节一致）。
 - 建议的动态验证见 `06-待验证问题与后续分析计划.md`。
