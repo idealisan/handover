@@ -1,0 +1,3 @@
+# GUI 使用标准库 http.server + 浏览器，无需 Web 框架或 GUI 工具包
+zeroconf>=0.130   # mDNS / Bonjour 设备发现（缺失时自动降级为手动输入）
+qrcode>=8.0       # 连接二维码矩阵（纯 Python，无需 Pillow）
